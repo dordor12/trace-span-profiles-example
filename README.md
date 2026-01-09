@@ -25,29 +25,33 @@ cp .env.example .env
 docker-compose up -d
 
 # View logs
-docker-compose logs -f app
+docker-compose logs -f app-wall app-cpu
 ```
 
 **Access the services:**
 - **Grafana**: http://localhost:3000 (admin/admin)
 - **Pyroscope**: http://localhost:4040
 - **Tempo**: http://localhost:3200
-- **Demo App**: http://localhost:8080
+- **Demo App (Wall profiling)**: http://localhost:8080
+- **Demo App (CPU profiling)**: http://localhost:8081
 
 ## Architecture
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Demo App      │────▶│     Tempo       │     │   Pyroscope     │
-│ (Spring Boot)   │     │   (Traces)      │     │  (Profiles)     │
+│  App (Wall)     │────▶│     Tempo       │     │   Pyroscope     │
+│  Port 8080      │     │   (Traces)      │     │  (Profiles)     │
 │                 │────▶│                 │     │                 │
-│ + OTel Agent    │     └────────┬────────┘     └────────┬────────┘
-│ + Pyroscope     │              │                       │
-│   Agent         │              └───────────┬───────────┘
-│ + otel-profiling│                          │
-│   extension     │              ┌───────────▼───────────┐
-└─────────────────┘              │       Grafana         │
-                                 │  (Trace ↔ Profile)    │
+├─────────────────┤     └────────┬────────┘     └────────┬────────┘
+│  App (CPU)      │              │                       │
+│  Port 8081      │              └───────────┬───────────┘
+│                 │                          │
+│ + OTel Agent    │              ┌───────────▼───────────┐
+│ + Pyroscope     │              │       Grafana         │
+│   Agent         │              │  (Trace ↔ Profile)    │
+│ + otel-profiling│              │                       │
+│   extension     │              │  Tempo (Wall) ──▶ Pyroscope (Wall)
+└─────────────────┘              │  Tempo (CPU)  ──▶ Pyroscope (CPU)
                                  └───────────────────────┘
 ```
 
@@ -76,9 +80,12 @@ To use locally built jars instead of published Maven artifacts:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PROFILING_EVENT` | `wall` | Profile type: `wall`, `cpu`, `alloc`, `lock` |
 | `PROFILING_INTERVAL` | `10ms` | Sampling interval |
 | `UPLOAD_INTERVAL` | `10s` | Upload frequency to Pyroscope |
+
+> **Note**: The setup includes two apps with fixed profiling types:
+> - `app-wall`: Wall (clock) profiling on port 8080
+> - `app-cpu`: CPU (itimer) profiling on port 8081
 
 ### Feature Flags
 
@@ -100,8 +107,8 @@ cd /path/to/otel-profiling-java
 # 2. Set the path in .env
 echo "PYROSCOPE_OTEL_JAR=/path/to/otel-profiling-java/build/libs/pyroscope-otel.jar" >> .env
 
-# 3. Rebuild and restart
-docker-compose up -d --build app
+# 3. Recreate the apps to use the new jar
+docker-compose up -d --force-recreate app-wall app-cpu
 ```
 
 ### Testing pyroscope-java Changes
@@ -114,8 +121,8 @@ cd /path/to/pyroscope-java
 # 2. Set the path in .env
 echo "PYROSCOPE_AGENT_JAR=/path/to/pyroscope-java/agent/build/libs/pyroscope.jar" >> .env
 
-# 3. Rebuild and restart
-docker-compose up -d --build app
+# 3. Recreate the apps to use the new jar
+docker-compose up -d --force-recreate app-wall app-cpu
 ```
 
 ### Testing Pyroscope Server Changes
@@ -139,14 +146,16 @@ docker-compose up -d pyroscope
 ## Viewing Span-Profile Correlation
 
 1. Open **Grafana** at http://localhost:3000
-2. Go to **Explore** → Select **Tempo**
-3. Search for traces (e.g., by service name `demo-app`)
+2. Go to **Explore** → Select **Tempo (Wall)** or **Tempo (CPU)**
+3. Search for traces by service name:
+   - `demo-app-wall` for wall profiling traces
+   - `demo-app-cpu` for CPU profiling traces
 4. Click on a trace to view its spans
 5. Click on a span → Click **Profiles** to see the correlated profile
 
 ## Demo App Endpoints
 
-The demo app exposes several endpoints for generating load:
+Both apps expose the same endpoints (use port 8080 for wall, 8081 for CPU):
 
 | Endpoint | Description |
 |----------|-------------|
@@ -155,6 +164,15 @@ The demo app exposes several endpoints for generating load:
 | `GET /api/products/search?query=X` | Search products |
 | `GET /api/orders` | List orders |
 | `GET /api/span-test/worker-spans?count=N&durationMs=M` | Generate N spans on worker threads |
+
+Example:
+```bash
+# Wall profiling app
+curl http://localhost:8080/api/users
+
+# CPU profiling app
+curl http://localhost:8081/api/users
+```
 
 ## Troubleshooting
 
@@ -165,29 +183,34 @@ The demo app exposes several endpoints for generating load:
    docker-compose logs pyroscope
    ```
 
-2. Check the app is sending profiles:
+2. Check the apps are sending profiles:
    ```bash
-   docker-compose logs app | grep -i pyroscope
+   docker-compose logs app-wall | grep -i pyroscope
+   docker-compose logs app-cpu | grep -i pyroscope
    ```
 
 ### Span-profile correlation not working
 
 1. Verify `otel-profiling-java` extension is loaded:
    ```bash
-   docker-compose logs app | grep -i "pyroscope-otel"
+   docker-compose logs app-wall | grep -i "pyroscope-otel"
    ```
 
 2. Check context propagation is enabled:
    ```bash
-   docker-compose logs app | grep -i "context.propagation"
+   docker-compose logs app-wall | grep -i "CONTEXT_PROPAGATION"
    ```
+
+3. Ensure you're using the correct Tempo datasource:
+   - **Tempo (Wall)** for `demo-app-wall` traces
+   - **Tempo (CPU)** for `demo-app-cpu` traces
 
 ### Building the demo app fails
 
 Ensure you have Docker with BuildKit enabled:
 ```bash
 export DOCKER_BUILDKIT=1
-docker-compose build app
+docker-compose build app-wall app-cpu
 ```
 
 ## Contributing
