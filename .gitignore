@@ -1,0 +1,27 @@
+# Environment files (contains local paths)
+.env
+
+# Build artifacts
+*.jar
+*.class
+target/
+build/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes data
+data/
+
+# Profiles output
+profiles/
+
+# Logs
+*.log
